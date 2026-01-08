@@ -23,19 +23,19 @@ python gui.py
 
 | Feature | Description |
 |---------|-------------|
+| **Historical Scan** | 🕰️ Quét bài cũ theo ngày (Pagination) |
 | **Capture First** | Tải HTML ngay khi phát hiện URL |
+| **Live Stream** | ⚡ Theo dõi tin mới realtime (No history load) |
 | **Concurrent Scanning** | Quét song song với `asyncio.gather` |
 | **Image Download** | Tải ảnh về `data/images/{article_id}/` |
 | **Link Status** | 🟢 Live / 🔴 Dead (vẫn đọc được từ cache) |
 | **FTS5 Search** | Full-text search siêu nhanh |
 | **Hot Reload** | Sửa config không cần restart |
-| **WAL Mode** | GUI + Crawler không bị lock |
-| **Proxy Rotation** | Chống bị chặn IP |
-| **Auto Cleanup** | Xóa bài discarded sau 7 ngày |
+| **Anti-Blocking** | Proxy Rotation + Random Jitter |
 
 ---
 
-## �️ Anti-Ban System
+## 🚦 Anti-Ban System
 
 ### Random Jitter
 ```python
@@ -49,37 +49,42 @@ sleep_time = poll_interval + random.uniform(0.5, 2.0)
 ```
 Tự động dừng khi bị chặn.
 
-### Ngưỡng an toàn
-
-| Setup | Frequency | Risk |
-|-------|-----------|------|
-| IP cá nhân | 15-20s | ✅ Safe |
-| Có Proxy | 5s | ✅ Safe |
-| IP cá nhân + 5s | ⚠️ Bị ban | ❌ |
-
 ---
 
-## 🎯 Triage Workflow
+## 🎯 Workflows
 
-```
-⚡ THE STREAM (Tin mới) → [Pick]
-        ↓
-📖 READING BOX (Cache) → [Save] / [Discard]
-        ↓
-📁 ARCHIVE (Export .db)
-```
+### 1. The Stream (Live Triage)
+Theo dõi tin tức mới nhất theo thời gian thực.
+- **Filter**: Lọc theo nguồn (Source) hoặc tìm kiếm tiêu đề.
+- **Pick**: Chọn bài viết quan trọng → Chuyển sang Reading Box.
+- **Live Mode**: Không load lại lịch sử cũ, chỉ hiện tin mới.
+
+### 2. Archive Hunter (Historical Scan)
+Quét và lưu trữ bài viết từ quá khứ (Deep Scan).
+1. Chọn nguồn (VD: Thanh Niên).
+2. Chọn ngày cần quét (VD: 2024-01-01).
+3. Bấm **Deep Scan** → Hệ thống tự động lùi trang (backtrack pagination) để tìm bài.
+
+### 3. Reading Box (Review)
+Nơi đọc và xử lý các bài đã chọn.
+- **Read**: Đọc offline (Text + Ảnh).
+- **Archive**: Lưu vĩnh viễn (status=2) + Export `.json`/`.db`.
+- **Discard**: Xóa.
 
 ---
 
 ## ⚙️ Configuration
 
-### Sources
+### Sources & Deep Scan
 ```yaml
 sources:
   - name: "ThanhNien_TrangChu"
     url: "https://thanhnien.vn/rss/home.rss"
-    frequency: 15  # Khuyên dùng 15-20s nếu không có proxy
-    enabled: true
+    deep_scan:
+      base_url: "https://thanhnien.vn/thoi-su" # URL trang danh sách
+      page_param: "p"       # ?p=1, ?p=2...
+      date_css: ".box-category-time" # CSS lấy ngày
+      date_format: "%d/%m/%Y"
 ```
 
 ### Proxy (Anti-blocking)
@@ -91,59 +96,23 @@ proxy:
     - "http://user:pass@proxy.com:8080"
 ```
 
-### Auto Cleanup
-```yaml
-cleanup:
-  enabled: true
-  discard_after_days: 7
-```
-
 ---
 
-## 💾 Export / Import
-
-| Format | Description |
-|--------|-------------|
-| `.db` | SQLite copy (nhanh, giữ FTS5) |
-| `.json` | Chỉ articles archived |
-
----
-
-## 📁 Project Structure
-
-```
-crawl/
-├── gui.py           # Triage UI
-├── main.py          # Orchestrator + Hot Reload
-├── archiver.py      # Capture + Image + Proxy
-├── scanner.py       # RSS/Sitemap scanner
-├── parser.py        # HTML parser
-├── storage.py       # SQLite + FTS5 + WAL
-├── config.yaml      # Configuration
-└── data/
-    ├── articles.db
-    └── images/
-```
-
----
-
-## 🔧 API
+## 🔧 API & CLI
 
 ```python
 from storage import get_storage
 storage = get_storage()
 
-# Triage
-storage.get_stream()
+# Triage & Management
+storage.get_stream(limit=100)
 storage.pick_article(id)
 storage.archive_article(id)
 
 # Search (FTS5)
 storage.search_articles("keyword")
 
-# Cleanup
-storage.auto_prune(days=7)
-
-# Export
-storage.export_full_db("backup.db")
+# Maintenance
+storage.auto_prune(days=7)  # Xóa bài rác
+storage.export_full_db("backup.db") # Backup toàn bộ
 ```
