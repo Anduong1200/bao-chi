@@ -1,0 +1,19 @@
+# News Crawler Dependencies
+
+# Async HTTP
+aiohttp>=3.9.0
+aiofiles>=23.0.0
+
+# HTML Parsing
+beautifulsoup4>=4.12.0
+lxml>=5.0.0
+
+# GUI
+PyQt6>=6.6.0
+
+# Config
+pyyaml>=6.0.0
+
+# Optional: Better async on Windows
+# Windows requires this for proper signal handling
+# Install with: pip install winloop (optional)

@@ -1,0 +1,157 @@
+# News Crawler Configuration
+# Human-editable - Reload without code changes
+
+# === SYSTEM SETTINGS ===
+system:
+  num_workers: 10
+  database: "news.db"
+  log_level: "INFO"
+
+# === MULTI-SOURCE CONFIGURATION ===
+sources:
+  # ============ THANH NIÊN ============
+  - name: "ThanhNien_TrangChu"
+    url: "https://thanhnien.vn/rss/home.rss"
+    type: "rss"
+    site_code: "TNO"
+    frequency: 5
+    enabled: true
+
+  - name: "ThanhNien_ThoiSu"
+    url: "https://thanhnien.vn/rss/thoi-su.rss"
+    type: "rss"
+    site_code: "TNO"
+    frequency: 10
+    enabled: true
+
+  - name: "ThanhNien_CongNghe"
+    url: "https://thanhnien.vn/rss/cong-nghe-game.rss"
+    type: "rss"
+    site_code: "TNO"
+    frequency: 15
+    enabled: true
+
+  # ============ TUỔI TRẺ ============
+  - name: "TuoiTre_Index"
+    url: "https://tuoitre.vn/sitemaps/index.rss"
+    type: "rss"
+    site_code: "TTO"
+    frequency: 5
+    enabled: true
+
+  - name: "TuoiTre_LatestNews"
+    url: "https://tuoitre.vn/sitemaps/latest-news.rss"
+    type: "rss"
+    site_code: "TTO"
+    frequency: 5
+    enabled: true
+
+  # ============ NHÂN DÂN ============
+  - name: "NhanDan_GoogleNews"
+    url: "https://nhandan.vn/sitemaps/google-news.xml"
+    type: "rss"
+    site_code: "ND"
+    frequency: 10
+    enabled: true
+
+  # ============ CÔNG AN NHÂN DÂN ============
+  - name: "CAND_Sitemap"
+    url: "https://cand.com.vn/sitemap_category.xml"
+    type: "rss"
+    site_code: "CAND"
+    frequency: 15
+    enabled: true
+
+  # ============ QUÂN ĐỘI NHÂN DÂN ============
+  - name: "QDND_Top300"
+    url: "https://www.qdnd.vn/sitemaps/0/top300article.xml"
+    type: "rss"
+    site_code: "QDND"
+    frequency: 10
+    enabled: true
+
+  - name: "QDND_Feed"
+    url: "https://www.qdnd.vn/sitemaps/pid/feed-0.xml"
+    type: "rss"
+    site_code: "QDND"
+    frequency: 10
+    enabled: true
+
+# === SITE-SPECIFIC SELECTORS ===
+selectors:
+  TNO: # Thanh Niên
+    title: "h1.detail-title"
+    sapo: "h2.detail-sapo"
+    content: "div.detail-content"
+    author: ".detail-author .name"
+    time: ".detail-time"
+
+  TTO: # Tuổi Trẻ
+    title: "h1.detail-title"
+    sapo: "h2.detail-sapo"
+    content: "div.detail-content"
+    author: ".author-info .name"
+    time: ".detail-time"
+
+  ND: # Nhân Dân
+    title: "h1.article-title"
+    sapo: ".article-sapo"
+    content: ".article-content"
+    author: ".author-name"
+    time: ".article-date"
+
+  CAND: # Công An Nhân Dân
+    title: "h1.title"
+    sapo: ".sapo"
+    content: ".content-detail"
+    author: ".author"
+    time: ".time"
+
+  QDND: # Quân Đội Nhân Dân
+    title: "h1.title-detail"
+    sapo: ".sapo"
+    content: ".noidung"
+    author: ".author"
+    time: ".time-detail"
+
+  VNE: # VnExpress (reserved)
+    title: "h1.title-detail"
+    sapo: "p.description"
+    content: "article.fck_detail"
+    author: "p.author_mail"
+    time: "span.date"
+
+  CAF: # CafeF (reserved)
+    title: "h1.title"
+    sapo: ".sapo"
+    content: ".detail-content"
+    author: ".author"
+    time: ".time"
+
+# === WORKER SETTINGS ===
+worker:
+  timeout: 5
+  max_retries: 3
+  priority_newest: true
+
+# === STORAGE ===
+storage:
+  type: "sqlite"
+  path: "./data"
+  db_name: "articles.db"
+  save_images: true
+
+# === ERROR HANDLING & ALERTING ===
+alerting:
+  error_threshold: 5
+  telegram:
+    enabled: false
+    bot_token: ""
+    chat_id: ""
+
+# === HTTP HEADERS (Anti-bot bypass) ===
+headers:
+  User-Agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+  Referer: "https://www.google.com/"
+  Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8"
+  Accept-Language: "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7"
