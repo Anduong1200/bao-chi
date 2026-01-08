@@ -95,8 +95,12 @@ class FlashNewsHunter:
                 
                 await self._capture_cycle()
                 
-                # Wait for next cycle
-                for _ in range(self.poll_interval):
+                # Wait for next cycle with RANDOM JITTER (anti-bot detection)
+                import random
+                jitter = random.uniform(0.5, 2.0)  # Random 0.5-2s extra
+                sleep_time = self.poll_interval + jitter
+                
+                for _ in range(int(sleep_time)):
                     if not self._running:
                         break
                     await asyncio.sleep(1)

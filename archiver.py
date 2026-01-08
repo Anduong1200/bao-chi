@@ -48,11 +48,22 @@ class AutoArchiver:
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
             timeout = aiohttp.ClientTimeout(total=10, connect=5)
+            
+            # Get proxy if configured
+            proxy = self.config.get_proxy()
+            
             self._session = aiohttp.ClientSession(
                 timeout=timeout,
                 headers=self.config.headers
             )
+            
+            # Store proxy for use in requests
+            self._proxy = proxy
         return self._session
+    
+    def _get_proxy_url(self) -> Optional[str]:
+        """Get current proxy URL for request."""
+        return getattr(self, '_proxy', None) or self.config.get_proxy()
     
     async def close(self):
         if self._session and not self._session.closed:
@@ -76,9 +87,17 @@ class AutoArchiver:
         
         # 2. IMMEDIATELY fetch content
         session = await self._get_session()
+        proxy = self._get_proxy_url()  # May be None if not configured
         
         try:
-            async with session.get(link.url) as resp:
+            async with session.get(link.url, proxy=proxy) as resp:
+                # Handle rate limiting (CRITICAL for anti-ban)
+                if resp.status == 429 or resp.status == 403:
+                    print(f"[Archiver] ⚠️ RATE LIMITED ({resp.status}): {link.url[:40]}")
+                    self._stats['failed'] += 1
+                    # Add source to cooldown (caller should handle)
+                    return None
+                
                 if resp.status != 200:
                     print(f"[Archiver] HTTP {resp.status}: {link.url[:50]}")
                     self._stats['failed'] += 1
