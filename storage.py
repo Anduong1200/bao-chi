@@ -79,6 +79,10 @@ class Storage:
     def _init_db(self):
         """Initialize database with triage status support."""
         with self._get_connection() as conn:
+            # Enable WAL mode for concurrent read/write (GUI + Crawler)
+            conn.execute("PRAGMA journal_mode=WAL;")
+            conn.execute("PRAGMA synchronous=NORMAL;")
+            
             conn.executescript('''
                 -- Articles table with status
                 CREATE TABLE IF NOT EXISTS articles (
@@ -150,6 +154,19 @@ class Storage:
             except: pass
             try:
                 conn.execute("ALTER TABLE articles ADD COLUMN link_alive INTEGER DEFAULT 1")
+            except: pass
+            
+            # FTS5 Full-Text Search (fast search)
+            try:
+                conn.execute('''
+                    CREATE VIRTUAL TABLE IF NOT EXISTS articles_fts USING fts5(
+                        title, 
+                        sapo, 
+                        content_text,
+                        content=articles,
+                        content_rowid=rowid
+                    )
+                ''')
             except: pass
             
             conn.commit()
@@ -325,13 +342,26 @@ class Storage:
             return [Article.from_row(row) for row in cursor.fetchall()]
     
     def search_articles(self, keyword: str, limit: int = 100) -> List[Article]:
+        """Fast full-text search using FTS5."""
         with self._get_connection() as conn:
-            cursor = conn.execute(
-                """SELECT * FROM articles 
-                   WHERE title LIKE ? OR content_text LIKE ?
-                   ORDER BY crawled_at DESC LIMIT ?""",
-                (f'%{keyword}%', f'%{keyword}%', limit)
-            )
+            try:
+                # Try FTS5 first (much faster)
+                cursor = conn.execute(
+                    """SELECT articles.* FROM articles
+                       JOIN articles_fts ON articles.rowid = articles_fts.rowid
+                       WHERE articles_fts MATCH ?
+                       ORDER BY rank
+                       LIMIT ?""",
+                    (keyword, limit)
+                )
+            except:
+                # Fallback to LIKE if FTS5 not available
+                cursor = conn.execute(
+                    """SELECT * FROM articles 
+                       WHERE title LIKE ? OR content_text LIKE ?
+                       ORDER BY crawled_at DESC LIMIT ?""",
+                    (f'%{keyword}%', f'%{keyword}%', limit)
+                )
             return [Article.from_row(row) for row in cursor.fetchall()]
     
     # === CHECKPOINT ===
@@ -502,44 +532,85 @@ class Storage:
     # === IMPORT / EXPORT DATABASE ===
     
     def export_full_db(self, output_path: str):
-        """Export entire database to JSON for backup/transfer."""
-        data = {
-            'exported_at': datetime.utcnow().isoformat(),
-            'articles': [],
-            'images': [],
-            'scan_state': []
-        }
+        """Export entire database to SQLite backup file."""
+        import shutil
+        from pathlib import Path
         
+        # Ensure .db extension
+        if not output_path.endswith('.db'):
+            output_path = output_path.replace('.json', '.db')
+            if not output_path.endswith('.db'):
+                output_path += '.db'
+        
+        # Copy the DB file directly (fastest and preserves everything)
+        shutil.copy2(str(self.db_path), output_path)
+        
+        # Get stats for reporting
         with self._get_connection() as conn:
-            # Articles
-            cursor = conn.execute("SELECT * FROM articles")
-            for row in cursor.fetchall():
-                data['articles'].append(dict(row))
-            
-            # Images
-            cursor = conn.execute("SELECT * FROM images")
-            for row in cursor.fetchall():
-                data['images'].append(dict(row))
-            
-            # Scan state
-            cursor = conn.execute("SELECT * FROM scan_state")  
-            for row in cursor.fetchall():
-                data['scan_state'].append(dict(row))
+            articles = conn.execute("SELECT COUNT(*) FROM articles").fetchone()[0]
+            images = conn.execute("SELECT COUNT(*) FROM images").fetchone()[0]
         
-        with open(output_path, 'w', encoding='utf-8') as f:
+        print(f"[Storage] DB exported: {articles} articles, {images} images -> {output_path}")
+        return {'articles': articles, 'images': images, 'path': output_path}
+    
+    def export_json(self, path: str, status: Optional[int] = STATUS_ARCHIVED):
+        """Export filtered articles to JSON."""
+        if status is not None:
+            articles = self.get_archived() if status == STATUS_ARCHIVED else self.get_stream()
+        else:
+            articles = self.get_all_articles()
+        
+        data = [asdict(a) for a in articles]
+        with open(path, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
-        
-        print(f"[Storage] Full DB exported: {len(data['articles'])} articles, {len(data['images'])} images")
-        return data
+        print(f"[Storage] Exported {len(articles)} articles to {path}")
     
     def import_db(self, input_path: str, merge: bool = True):
         """
-        Import database from JSON backup.
+        Import database from backup file (.db or .json).
         
         Args:
-            input_path: Path to JSON file
+            input_path: Path to backup file
             merge: If True, merge with existing. If False, replace all.
         """
+        from pathlib import Path
+        import shutil
+        
+        # Check if it's a SQLite DB file
+        if input_path.endswith('.db'):
+            if not merge:
+                # Replace: just copy the file
+                shutil.copy2(input_path, str(self.db_path))
+                print(f"[Storage] DB replaced from {input_path}")
+                return {'articles': '(replaced)', 'images': '(replaced)'}
+            else:
+                # Merge: attach and copy data
+                with self._get_connection() as conn:
+                    conn.execute(f"ATTACH DATABASE '{input_path}' AS import_db")
+                    
+                    # Import articles
+                    conn.execute("""
+                        INSERT OR REPLACE INTO articles 
+                        SELECT * FROM import_db.articles
+                    """)
+                    
+                    # Import images
+                    conn.execute("""
+                        INSERT OR REPLACE INTO images 
+                        SELECT * FROM import_db.images
+                    """)
+                    
+                    conn.execute("DETACH DATABASE import_db")
+                    conn.commit()
+                
+                with self._get_connection() as conn:
+                    articles = conn.execute("SELECT COUNT(*) FROM articles").fetchone()[0]
+                    images = conn.execute("SELECT COUNT(*) FROM images").fetchone()[0]
+                
+                print(f"[Storage] DB merged: {articles} articles, {images} images")
+                return {'articles': articles, 'images': images}
+        
+        # JSON file (legacy)
         with open(input_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
         
@@ -599,6 +670,43 @@ class Storage:
             conn.execute("DELETE FROM error_log")
             conn.commit()
         print("[Storage] Database cleared!")
+    
+    def auto_prune(self, days: int = 7):
+        """
+        Automatically delete old discarded articles.
+        Also deletes associated images from disk.
+        """
+        from pathlib import Path
+        import shutil
+        
+        cutoff = (datetime.utcnow() - __import__('datetime').timedelta(days=days)).isoformat()
+        
+        with self._get_connection() as conn:
+            # Get articles to delete
+            cursor = conn.execute(
+                "SELECT id FROM articles WHERE status = -1 AND crawled_at < ?",
+                (cutoff,)
+            )
+            article_ids = [row['id'] for row in cursor.fetchall()]
+            
+            if not article_ids:
+                return 0
+            
+            # Delete images from disk
+            for article_id in article_ids:
+                img_dir = Path("data/images") / article_id
+                if img_dir.exists():
+                    shutil.rmtree(img_dir, ignore_errors=True)
+            
+            # Delete from DB
+            placeholders = ','.join('?' * len(article_ids))
+            conn.execute(f"DELETE FROM images WHERE article_id IN ({placeholders})", article_ids)
+            conn.execute(f"DELETE FROM articles WHERE id IN ({placeholders})", article_ids)
+            conn.execute(f"DELETE FROM seen_urls WHERE article_id IN ({placeholders})", article_ids)
+            conn.commit()
+        
+        print(f"[Storage] Pruned {len(article_ids)} old discarded articles")
+        return len(article_ids)
 
 
 # === Singleton ===

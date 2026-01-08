@@ -155,3 +155,20 @@ headers:
   Referer: "https://www.google.com/"
   Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8"
   Accept-Language: "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7"
+
+# === PROXY ROTATION (Anti-blocking) ===
+# Add your proxies here. Format: protocol://user:pass@host:port or protocol://host:port
+# Set enabled: true when you have proxies configured
+proxy:
+  enabled: false
+  rotate: true # Rotate through proxies randomly
+  list:
+    # - "http://user:pass@proxy1.example.com:8080"
+    # - "http://proxy2.example.com:8080"
+    # - "socks5://proxy3.example.com:1080"
+
+# === AUTO CLEANUP ===
+cleanup:
+  enabled: true
+  discard_after_days: 7 # Delete discarded articles older than X days
+  run_on_start: false

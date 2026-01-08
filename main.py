@@ -78,9 +78,21 @@ class FlashNewsHunter:
         # Initialize archiver with callback
         self._archiver = AutoArchiver(on_captured=self.on_article)
         
+        # Auto cleanup on start if enabled
+        if self.config.cleanup.run_on_start:
+            pruned = self.storage.auto_prune(self.config.cleanup.discard_after_days)
+            if pruned:
+                self._log(f"Pruned {pruned} old articles", "info")
+        
         # Main loop
         try:
             while self._running:
+                # Check for config hot reload
+                from config import check_reload
+                if check_reload():
+                    self._log("Config changed! Reloading...", "warning")
+                    await self._reload_scanners()
+                
                 await self._capture_cycle()
                 
                 # Wait for next cycle
@@ -92,48 +104,83 @@ class FlashNewsHunter:
         finally:
             await self._cleanup()
     
+    async def _reload_scanners(self):
+        """Reload scanners when config changes."""
+        # Close old scanners
+        for scanner in self._scanners.values():
+            await scanner.close()
+        self._scanners.clear()
+        
+        # Reload config
+        from config import get_config
+        self.config = get_config()
+        
+        # Create new scanners
+        for source in self.config.get_enabled_sources():
+            self._scanners[source.name] = Scanner(source)
+        
+        self._log(f"Reloaded {len(self._scanners)} scanners", "success")
+    
     async def _capture_cycle(self):
-        """Single capture cycle: scan all sources and archive."""
+        """Single capture cycle: scan ALL sources CONCURRENTLY."""
         self._stats['scans'] += 1
         self._stats['last_scan'] = datetime.now().isoformat()
         
-        total_captured = 0
+        # Create tasks for all sources (CONCURRENT)
+        tasks = [
+            self._scan_source(name, scanner) 
+            for name, scanner in self._scanners.items()
+        ]
         
-        for source_name, scanner in self._scanners.items():
-            if not self._running:
-                break
-            
-            try:
-                # 1. Scan for new links
-                links = await scanner.scan()
-                
-                if not links:
-                    continue
-                
-                # 2. Filter already-seen
-                new_urls = self.storage.filter_new_urls([l.url for l in links])
-                new_links = [l for l in links if l.url in new_urls]
-                
-                if not new_links:
-                    continue
-                
-                self._log(f"[{source_name}] {len(new_links)} new articles", "info")
-                
-                # 3. IMMEDIATELY capture each
-                for link in new_links:
-                    if not self._running:
-                        break
-                    
-                    article = await self._archiver.capture(link, source_name)
-                    if article:
-                        total_captured += 1
-                
-            except Exception as e:
-                self._log(f"[{source_name}] Error: {e}", "error")
+        # Run ALL sources in parallel
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # Count total captured
+        total_captured = sum(r for r in results if isinstance(r, int))
         
         if total_captured > 0:
             self._stats['captured'] += total_captured
             self._log(f"Cycle complete: +{total_captured} articles", "success")
+    
+    async def _scan_source(self, source_name: str, scanner) -> int:
+        """Scan a single source and capture articles. Returns count."""
+        if not self._running:
+            return 0
+        
+        captured = 0
+        
+        try:
+            # 1. Scan for new links
+            links = await scanner.scan()
+            
+            if not links:
+                return 0
+            
+            # 2. Filter already-seen
+            new_urls = self.storage.filter_new_urls([l.url for l in links])
+            new_links = [l for l in links if l.url in new_urls]
+            
+            if not new_links:
+                return 0
+            
+            self._log(f"[{source_name}] {len(new_links)} new", "info")
+            
+            # 3. Capture articles CONCURRENTLY (max 5 at a time)
+            semaphore = asyncio.Semaphore(5)
+            
+            async def capture_with_limit(link):
+                async with semaphore:
+                    return await self._archiver.capture(link, source_name)
+            
+            capture_tasks = [capture_with_limit(link) for link in new_links]
+            articles = await asyncio.gather(*capture_tasks, return_exceptions=True)
+            
+            captured = sum(1 for a in articles if a is not None and not isinstance(a, Exception))
+        
+        except Exception as e:
+            self._log(f"[{source_name}] Error: {e}", "error")
+        
+        return captured
     
     async def stop(self):
         """Stop the capture loop gracefully."""

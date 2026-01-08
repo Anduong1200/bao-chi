@@ -25,59 +25,75 @@ python main.py
 
 ---
 
-## 📁 Project Structure
+## ✨ Key Features
+
+| Feature | Description |
+|---------|-------------|
+| **Capture First** | Tải HTML ngay khi phát hiện URL (3-5s interval) |
+| **Concurrent Scanning** | Quét song song tất cả sources với `asyncio.gather` |
+| **Physical Image Download** | Tải ảnh về `data/images/{article_id}/` |
+| **Link Status** | � Live / 🔴 Dead (vẫn đọc được từ cache) |
+| **Triage Workflow** | Stream → Reading Box → Archive |
+| **FTS5 Search** | Full-text search siêu nhanh |
+| **Hot Reload** | Sửa config.yaml không cần restart |
+| **WAL Mode** | GUI + Crawler chạy song song không bị lock |
+| **Proxy Rotation** | Chống bị chặn IP |
+| **Auto Cleanup** | Tự động xóa bài discarded sau 7 ngày |
+
+---
+
+## �📁 Project Structure
 
 ```
 crawl/
 ├── gui.py           # Triage UI (Stream/Reading Box/Archive)
 ├── main.py          # FlashNewsHunter orchestrator
-├── archiver.py      # Auto-capture on URL detection
+├── archiver.py      # Auto-capture + image download
 ├── scanner.py       # RSS/Sitemap scanner
 ├── parser.py        # HTML parser
-├── storage.py       # SQLite with triage status
-├── config.yaml      # Sources configuration
-├── config.py        # Config loader
+├── storage.py       # SQLite + FTS5 + WAL
+├── config.yaml      # Sources + proxy + cleanup config
+├── config.py        # Config loader with hot reload
 ├── alerter.py       # Telegram alerts
-├── worker.py        # Worker pool
+├── worker.py        # Worker pool (optional)
 └── data/
-    └── articles.db  # SQLite database
+    ├── articles.db  # SQLite database
+    └── images/      # Downloaded images
 ```
 
 ---
 
-## 🎯 Core Features
+## 🎯 Triage Workflow
 
-### 1. Capture First
-- Scan sources every 3-5 seconds
-- IMMEDIATELY fetch + save HTML when new URL detected
-- No waiting for user interaction
-
-### 2. Triage Workflow (3 Tabs)
-
-| Tab | Status | Actions |
-|-----|--------|---------|
-| ⚡ **Stream** | `new` (0) | [Pick] → Reading Box |
-| 📖 **Reading Box** | `picked` (1) | [Save] / [Discard] |
-| 📁 **Archive** | `archived` (2) | Export, Search |
-
-### 3. Link Status Tracking
-- 🟢 Live - Link còn sống
-- 🔴 Dead - Link đã chết (vẫn đọc được từ cache)
-
-### 4. Image Tracking
-- Mỗi ảnh có ID riêng gắn với `article_id`
-- Có thể tải ảnh về local sau
-
-### 5. DB Control
-- **Export Full DB** - Backup toàn bộ
-- **Import DB** - Merge hoặc Replace
+```
+┌─────────────────────────────────────────────────────┐
+│  ⚡ THE STREAM (Tin mới đổ về)                      │
+├─────────────────────────────────────────────────────┤
+│ 🟢 09:01  ThanhNien  Vụ án XYZ...     [Pick]        │
+│ 🔴 09:00  TuoiTre    Lãnh đạo từ...   [Pick]        │
+└─────────────────────────────────────────────────────┘
+                      │ Click [Pick]
+                      ▼
+┌─────────────────────────────────────────────────────┐
+│  � READING BOX (Đọc từ cache offline)              │
+├─────────────────────────────────────────────────────┤
+│  Nội dung bài viết (dù link gốc đã chết)            │
+│                                                     │
+│         [� Save]              [� Discard]          │
+└─────────────────────────────────────────────────────┘
+                      │ Click [Save]
+                      ▼
+┌─────────────────────────────────────────────────────┐
+│  📁 ARCHIVE (Kho lưu trữ)                           │
+│  Export: .db (SQLite) hoặc .json                    │
+└─────────────────────────────────────────────────────┘
+```
 
 ---
 
 ## ⚙️ Configuration
 
-Edit `config.yaml` to add/modify sources:
-
+### Sources (`config.yaml`)
 ```yaml
 sources:
   - name: "ThanhNien_TrangChu"
@@ -85,41 +101,61 @@ sources:
     type: rss
     site_code: TNO
     enabled: true
-    frequency: 60
+    frequency: 5
+```
+
+### Proxy (Anti-blocking)
+```yaml
+proxy:
+  enabled: true
+  rotate: true
+  list:
+    - "http://user:pass@proxy1.com:8080"
+    - "socks5://proxy2.com:1080"
+```
+
+### Auto Cleanup
+```yaml
+cleanup:
+  enabled: true
+  discard_after_days: 7
+  run_on_start: false
 ```
 
 ---
 
-## 📊 Database Schema
+## 💾 Export / Import
 
-**Articles Table:**
-```sql
-articles (
-    id TEXT PRIMARY KEY,
-    source_name TEXT,
-    url TEXT UNIQUE,
-    title TEXT,
-    content_html TEXT,
-    status INTEGER,      -- 0=new, 1=picked, 2=archived, -1=discarded
-    link_alive INTEGER,  -- 1=alive, 0=dead
-    crawled_at TEXT
-)
-```
+| Format | Use Case |
+|--------|----------|
+| `.db` | Full backup (instant copy, giữ FTS5 + indexes) |
+| `.json` | Chỉ articles đã archive (portable) |
 
-**Images Table:**
-```sql
-images (
-    id TEXT PRIMARY KEY,
-    article_id TEXT,     -- Foreign key
-    url TEXT,
-    local_path TEXT,
-    downloaded INTEGER
-)
+```python
+from storage import get_storage
+storage = get_storage()
+
+# Export
+storage.export_full_db("backup.db")      # SQLite copy
+storage.export_json("archive.json")      # JSON
+
+# Import
+storage.import_db("backup.db", merge=True)   # Merge
+storage.import_db("backup.db", merge=False)  # Replace
 ```
 
 ---
 
-## 🔧 API Reference
+## 🔧 Performance
+
+- **Concurrent scanning**: 10 sources × 2s = ~2s total (not 20s)
+- **WAL mode**: GUI + Crawler đọc/ghi song song
+- **FTS5**: Search 100k articles trong milliseconds
+- **Background image download**: Không block main loop
+
+---
+
+## � API Reference
 
 ```python
 from storage import get_storage
@@ -127,30 +163,23 @@ from storage import get_storage
 storage = get_storage()
 
 # Triage
-stream = storage.get_stream()           # Get new articles
-storage.pick_article(article_id)        # Move to Reading Box
-storage.archive_article(article_id)     # Save permanently
-storage.discard_article(article_id)     # Throw away
+storage.get_stream()                    # Tin mới
+storage.pick_article(id)                # → Reading Box
+storage.archive_article(id)             # → Archive
+storage.discard_article(id)             # → Trash
 
-# Images
-storage.save_image(article_id, img_url)
-images = storage.get_article_images(article_id)
+# Search (FTS5)
+storage.search_articles("keyword")
 
-# Backup
-storage.export_full_db("backup.json")
-storage.import_db("backup.json", merge=True)
+# Cleanup
+storage.auto_prune(days=7)              # Xóa discarded cũ
 ```
 
 ---
 
-## 📋 Workflow
+## �️ Stability Features
 
-```
-1. Scanner detects new URL
-2. Archiver IMMEDIATELY fetches HTML
-3. Saved to DB with status=new
-4. Appears in Stream tab
-5. User clicks [Pick] → Reading Box
-6. User reads from CACHE (works even if link is dead!)
-7. User clicks [Save] → Archive
-```
+- **Hot Reload**: Sửa `config.yaml` → Tool tự reload scanners
+- **WAL Mode**: Không bị "database is locked"
+- **Error Recovery**: Checkpoint cho mỗi source
+- **Graceful Shutdown**: Ctrl+C an toàn

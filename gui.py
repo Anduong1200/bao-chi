@@ -782,25 +782,26 @@ class ArchivePanel(QWidget):
             QMessageBox.information(self, "Done", f"Exported to {path}")
     
     def _export_full(self):
-        """Export full database including all articles and images."""
+        """Export full database as SQLite backup."""
         path, _ = QFileDialog.getSaveFileName(
             self, "Export Full Database", 
-            f"full_backup_{datetime.now():%Y%m%d_%H%M}.json", 
-            "JSON (*.json)"
+            f"backup_{datetime.now():%Y%m%d_%H%M}.db", 
+            "SQLite Database (*.db)"
         )
         if path:
             data = self.storage.export_full_db(path)
             QMessageBox.information(
                 self, "Done", 
-                f"Exported to {path}\n\n"
-                f"Articles: {len(data['articles'])}\n"
-                f"Images: {len(data['images'])}"
+                f"Exported to {data['path']}\n\n"
+                f"Articles: {data['articles']}\n"
+                f"Images: {data['images']}"
             )
     
     def _import_db(self):
-        """Import database from JSON backup."""
+        """Import database from backup."""
         path, _ = QFileDialog.getOpenFileName(
-            self, "Import Database", "", "JSON (*.json)"
+            self, "Import Database", "", 
+            "Database Files (*.db *.json);;SQLite (*.db);;JSON (*.json)"
         )
         if path:
             reply = QMessageBox.question(

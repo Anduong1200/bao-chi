@@ -127,9 +127,8 @@ class AutoArchiver:
             self._stats['captured'] += 1
             print(f"[Archiver] ✓ {article.title[:40]}...")
             
-            # 5b. Save image records with article ID
-            for img_url in article.images[:10]:  # Limit to 10 images
-                self.storage.save_image(article.id, img_url)
+            # 5b. Download images physically (async background)
+            asyncio.create_task(self._download_images(article))
             
             # 6. Notify UI
             if self.on_captured:
@@ -138,6 +137,48 @@ class AutoArchiver:
             return article
         
         return None
+    
+    async def _download_images(self, article: Article):
+        """Download article images to local storage."""
+        if not article.images:
+            return
+        
+        from pathlib import Path
+        
+        # Create article image folder
+        img_dir = Path("data/images") / article.id
+        img_dir.mkdir(parents=True, exist_ok=True)
+        
+        session = await self._get_session()
+        
+        for i, img_url in enumerate(article.images[:10]):  # Max 10 images
+            try:
+                async with session.get(img_url) as resp:
+                    if resp.status != 200:
+                        continue
+                    
+                    # Determine extension from content-type
+                    content_type = resp.headers.get('content-type', '')
+                    ext = 'jpg'
+                    if 'png' in content_type:
+                        ext = 'png'
+                    elif 'gif' in content_type:
+                        ext = 'gif'
+                    elif 'webp' in content_type:
+                        ext = 'webp'
+                    
+                    # Save image
+                    img_path = img_dir / f"{i}.{ext}"
+                    content = await resp.read()
+                    
+                    with open(img_path, 'wb') as f:
+                        f.write(content)
+                    
+                    # Update DB with local path
+                    image_id = self.storage.save_image(article.id, img_url, str(img_path))
+                    
+            except Exception as e:
+                print(f"[Archiver] Image download failed: {e}")
     
     async def capture_batch(self, links: List[ArticleLink], source_name: str) -> List[Article]:
         """

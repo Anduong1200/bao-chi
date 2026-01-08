@@ -75,6 +75,36 @@ class SelectorSet:
 
 
 @dataclass
+class ProxyConfig:
+    """Proxy rotation configuration."""
+    enabled: bool = False
+    rotate: bool = True
+    list: List[str] = field(default_factory=list)
+    _current_index: int = field(default=0, repr=False)
+    
+    def get_proxy(self) -> Optional[str]:
+        """Get next proxy (rotating)."""
+        if not self.enabled or not self.list:
+            return None
+        
+        if self.rotate:
+            import random
+            return random.choice(self.list)
+        else:
+            proxy = self.list[self._current_index]
+            self._current_index = (self._current_index + 1) % len(self.list)
+            return proxy
+
+
+@dataclass
+class CleanupConfig:
+    """Auto cleanup configuration."""
+    enabled: bool = True
+    discard_after_days: int = 7
+    run_on_start: bool = False
+
+
+@dataclass
 class Config:
     system: SystemConfig = field(default_factory=SystemConfig)
     sources: List[SourceConfig] = field(default_factory=list)
@@ -83,6 +113,8 @@ class Config:
     alerting: AlertingConfig = field(default_factory=AlertingConfig)
     storage: StorageConfig = field(default_factory=StorageConfig)
     headers: Dict[str, str] = field(default_factory=dict)
+    proxy: ProxyConfig = field(default_factory=ProxyConfig)
+    cleanup: CleanupConfig = field(default_factory=CleanupConfig)
     
     _config_path: Optional[Path] = field(default=None, repr=False)
     _last_modified: float = field(default=0, repr=False)
@@ -94,6 +126,10 @@ class Config:
     def get_selectors(self, site_code: str) -> SelectorSet:
         """Get selectors for a site code."""
         return self.selectors.get(site_code, SelectorSet())
+    
+    def get_proxy(self) -> Optional[str]:
+        """Get a proxy from the rotation list."""
+        return self.proxy.get_proxy()
 
 
 # Global config instance
@@ -208,6 +244,22 @@ def load_config(config_path: Optional[str] = None) -> Config:
         save_images=storage_data.get('save_images', True)
     )
     
+    # Parse proxy config
+    proxy_data = data.get('proxy', {})
+    proxy = ProxyConfig(
+        enabled=proxy_data.get('enabled', False),
+        rotate=proxy_data.get('rotate', True),
+        list=proxy_data.get('list', []) or []
+    )
+    
+    # Parse cleanup config
+    cleanup_data = data.get('cleanup', {})
+    cleanup = CleanupConfig(
+        enabled=cleanup_data.get('enabled', True),
+        discard_after_days=cleanup_data.get('discard_after_days', 7),
+        run_on_start=cleanup_data.get('run_on_start', False)
+    )
+    
     # Build config
     config = Config(
         system=system,
@@ -216,7 +268,9 @@ def load_config(config_path: Optional[str] = None) -> Config:
         worker=worker,
         alerting=alerting,
         storage=storage,
-        headers=data.get('headers', {})
+        headers=data.get('headers', {}),
+        proxy=proxy,
+        cleanup=cleanup
     )
     
     config._config_path = path
