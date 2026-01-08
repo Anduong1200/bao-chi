@@ -13,14 +13,8 @@ Hệ thống tự động tải HTML **ngay lập tức** khi phát hiện URL m
 ## 🚀 Quick Start
 
 ```bash
-# Install dependencies
 pip install -r requirements.txt
-
-# Run GUI
 python gui.py
-
-# Or run capture loop only (headless)
-python main.py
 ```
 
 ---
@@ -29,79 +23,63 @@ python main.py
 
 | Feature | Description |
 |---------|-------------|
-| **Capture First** | Tải HTML ngay khi phát hiện URL (3-5s interval) |
-| **Concurrent Scanning** | Quét song song tất cả sources với `asyncio.gather` |
-| **Physical Image Download** | Tải ảnh về `data/images/{article_id}/` |
-| **Link Status** | � Live / 🔴 Dead (vẫn đọc được từ cache) |
-| **Triage Workflow** | Stream → Reading Box → Archive |
+| **Capture First** | Tải HTML ngay khi phát hiện URL |
+| **Concurrent Scanning** | Quét song song với `asyncio.gather` |
+| **Image Download** | Tải ảnh về `data/images/{article_id}/` |
+| **Link Status** | 🟢 Live / 🔴 Dead (vẫn đọc được từ cache) |
 | **FTS5 Search** | Full-text search siêu nhanh |
-| **Hot Reload** | Sửa config.yaml không cần restart |
-| **WAL Mode** | GUI + Crawler chạy song song không bị lock |
+| **Hot Reload** | Sửa config không cần restart |
+| **WAL Mode** | GUI + Crawler không bị lock |
 | **Proxy Rotation** | Chống bị chặn IP |
-| **Auto Cleanup** | Tự động xóa bài discarded sau 7 ngày |
+| **Auto Cleanup** | Xóa bài discarded sau 7 ngày |
 
 ---
 
-## �📁 Project Structure
+## �️ Anti-Ban System
 
+### Random Jitter
+```python
+# Tự động thêm 0.5-2s delay mỗi cycle
+sleep_time = poll_interval + random.uniform(0.5, 2.0)
 ```
-crawl/
-├── gui.py           # Triage UI (Stream/Reading Box/Archive)
-├── main.py          # FlashNewsHunter orchestrator
-├── archiver.py      # Auto-capture + image download
-├── scanner.py       # RSS/Sitemap scanner
-├── parser.py        # HTML parser
-├── storage.py       # SQLite + FTS5 + WAL
-├── config.yaml      # Sources + proxy + cleanup config
-├── config.py        # Config loader with hot reload
-├── alerter.py       # Telegram alerts
-├── worker.py        # Worker pool (optional)
-└── data/
-    ├── articles.db  # SQLite database
-    └── images/      # Downloaded images
+
+### Rate Limit Detection
 ```
+[Archiver] ⚠️ RATE LIMITED (429): ...
+```
+Tự động dừng khi bị chặn.
+
+### Ngưỡng an toàn
+
+| Setup | Frequency | Risk |
+|-------|-----------|------|
+| IP cá nhân | 15-20s | ✅ Safe |
+| Có Proxy | 5s | ✅ Safe |
+| IP cá nhân + 5s | ⚠️ Bị ban | ❌ |
 
 ---
 
 ## 🎯 Triage Workflow
 
 ```
-┌─────────────────────────────────────────────────────┐
-│  ⚡ THE STREAM (Tin mới đổ về)                      │
-├─────────────────────────────────────────────────────┤
-│ 🟢 09:01  ThanhNien  Vụ án XYZ...     [Pick]        │
-│ 🔴 09:00  TuoiTre    Lãnh đạo từ...   [Pick]        │
-└─────────────────────────────────────────────────────┘
-                      │ Click [Pick]
-                      ▼
-┌─────────────────────────────────────────────────────┐
-│  � READING BOX (Đọc từ cache offline)              │
-├─────────────────────────────────────────────────────┤
-│  Nội dung bài viết (dù link gốc đã chết)            │
-│                                                     │
-│         [� Save]              [� Discard]          │
-└─────────────────────────────────────────────────────┘
-                      │ Click [Save]
-                      ▼
-┌─────────────────────────────────────────────────────┐
-│  📁 ARCHIVE (Kho lưu trữ)                           │
-│  Export: .db (SQLite) hoặc .json                    │
-└─────────────────────────────────────────────────────┘
+⚡ THE STREAM (Tin mới) → [Pick]
+        ↓
+📖 READING BOX (Cache) → [Save] / [Discard]
+        ↓
+📁 ARCHIVE (Export .db)
 ```
 
 ---
 
 ## ⚙️ Configuration
 
-### Sources (`config.yaml`)
+### Sources
 ```yaml
 sources:
   - name: "ThanhNien_TrangChu"
     url: "https://thanhnien.vn/rss/home.rss"
-    type: rss
-    site_code: TNO
+    frequency: 15  # Khuyên dùng 15-20s nếu không có proxy
     enabled: true
-    frequency: 5
 ```
 
 ### Proxy (Anti-blocking)
@@ -110,8 +88,7 @@ proxy:
   enabled: true
   rotate: true
   list:
-    - "http://user:pass@proxy1.com:8080"
-    - "socks5://proxy2.com:1080"
+    - "http://user:pass@proxy.com:8080"
 ```
 
 ### Auto Cleanup
@@ -119,67 +96,54 @@ proxy:
 cleanup:
   enabled: true
   discard_after_days: 7
-  run_on_start: false
 ```
 
 ---
 
 ## 💾 Export / Import
 
-| Format | Use Case |
-|--------|----------|
-| `.db` | Full backup (instant copy, giữ FTS5 + indexes) |
-| `.json` | Chỉ articles đã archive (portable) |
+| Format | Description |
+|--------|-------------|
+| `.db` | SQLite copy (nhanh, giữ FTS5) |
+| `.json` | Chỉ articles archived |
 
-```python
-from storage import get_storage
-storage = get_storage()
+---
 
-# Export
-storage.export_full_db("backup.db")      # SQLite copy
-storage.export_json("archive.json")      # JSON
+## 📁 Project Structure
 
-# Import
-storage.import_db("backup.db", merge=True)   # Merge
-storage.import_db("backup.db", merge=False)  # Replace
+```
+crawl/
+├── gui.py           # Triage UI
+├── main.py          # Orchestrator + Hot Reload
+├── archiver.py      # Capture + Image + Proxy
+├── scanner.py       # RSS/Sitemap scanner
+├── parser.py        # HTML parser
+├── storage.py       # SQLite + FTS5 + WAL
+├── config.yaml      # Configuration
+└── data/
+    ├── articles.db
+    └── images/
 ```
 
 ---
 
-## 🔧 Performance
-
-- **Concurrent scanning**: 10 sources × 2s = ~2s total (not 20s)
-- **WAL mode**: GUI + Crawler đọc/ghi song song
-- **FTS5**: Search 100k articles trong milliseconds
-- **Background image download**: Không block main loop
-
----
-
-## � API Reference
+## 🔧 API
 
 ```python
 from storage import get_storage
-
 storage = get_storage()
 
 # Triage
-storage.get_stream()                    # Tin mới
-storage.pick_article(id)                # → Reading Box
-storage.archive_article(id)             # → Archive
-storage.discard_article(id)             # → Trash
+storage.get_stream()
+storage.pick_article(id)
+storage.archive_article(id)
 
 # Search (FTS5)
 storage.search_articles("keyword")
 
 # Cleanup
-storage.auto_prune(days=7)              # Xóa discarded cũ
+storage.auto_prune(days=7)
+
+# Export
+storage.export_full_db("backup.db")
 ```
-
----
-
-## �️ Stability Features
-
-- **Hot Reload**: Sửa `config.yaml` → Tool tự reload scanners
-- **WAL Mode**: Không bị "database is locked"
-- **Error Recovery**: Checkpoint cho mỗi source
-- **Graceful Shutdown**: Ctrl+C an toàn
