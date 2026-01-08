@@ -154,9 +154,3 @@ storage.import_db("backup.json", merge=True)
 6. User reads from CACHE (works even if link is dead!)
 7. User clicks [Save] → Archive
 ```
-
----
-
-## 📝 License
-
-MIT License
