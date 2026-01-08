@@ -14,8 +14,13 @@ sources:
     url: "https://thanhnien.vn/rss/home.rss"
     type: "rss"
     site_code: "TNO"
-    frequency: 5
+    frequency: 15
     enabled: true
+    deep_scan:
+      base_url: "https://thanhnien.vn/thoi-su"
+      page_param: "p"
+      date_css: ".box-category-time"
+      date_format: "%d/%m/%Y"
 
   - name: "ThanhNien_ThoiSu"
     url: "https://thanhnien.vn/rss/thoi-su.rss"
@@ -25,7 +30,7 @@ sources:
     enabled: true
 
   - name: "ThanhNien_CongNghe"
-    url: "https://thanhnien.vn/rss/cong-nghe-game.rss"
+    url: "https://thanhnien.vn/rss/cong-nghe.rss"
     type: "rss"
     site_code: "TNO"
     frequency: 15
@@ -48,7 +53,7 @@ sources:
 
   # ============ NHÂN DÂN ============
   - name: "NhanDan_GoogleNews"
-    url: "https://nhandan.vn/sitemaps/google-news.xml"
+    url: "https://nhandan.vn/rss/tin-moi-nhat.rss"
     type: "rss"
     site_code: "ND"
     frequency: 10
@@ -56,7 +61,7 @@ sources:
 
   # ============ CÔNG AN NHÂN DÂN ============
   - name: "CAND_Sitemap"
-    url: "https://cand.com.vn/sitemap_category.xml"
+    url: "https://cand.com.vn/rss/trang-chu.rss"
     type: "rss"
     site_code: "CAND"
     frequency: 15
@@ -80,25 +85,25 @@ sources:
 # === SITE-SPECIFIC SELECTORS ===
 selectors:
   TNO: # Thanh Niên
-    title: "h1.detail-title"
-    sapo: "h2.detail-sapo"
-    content: "div.detail-content"
-    author: ".detail-author .name"
-    time: ".detail-time"
+    title: "h1.detail-title, .detail-title, h1.title"
+    sapo: "h2.detail-sapo, .detail-sapo, .sapo"
+    content: "div.detail-content, .detail-content, #abody"
+    author: ".detail-author .name, .author-name"
+    time: ".detail-time, .meta-time"
 
   TTO: # Tuổi Trẻ
-    title: "h1.detail-title"
-    sapo: "h2.detail-sapo"
-    content: "div.detail-content"
-    author: ".author-info .name"
+    title: "h1.detail-title, .article-title"
+    sapo: "h2.detail-sapo, .sapo"
+    content: "div.detail-content, .fck_detail"
+    author: ".author-info .name, .author"
     time: ".detail-time"
 
   ND: # Nhân Dân
-    title: "h1.article-title"
-    sapo: ".article-sapo"
-    content: ".article-content"
-    author: ".author-name"
-    time: ".article-date"
+    title: "h1.article-title, .box-title-detail"
+    sapo: ".article-sapo, .box-des-detail"
+    content: ".article-content, .box-content-detail"
+    author: ".author-name, .box-author"
+    time: ".article-date, .box-date"
 
   CAND: # Công An Nhân Dân
     title: "h1.title"

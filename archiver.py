@@ -115,31 +115,30 @@ class AutoArchiver:
             return None
         
         # 3. Parse content
+        # Find site_code from config
+        source_config = next((s for s in self.config.sources if s.name == source_name), None)
+        site_code = source_config.site_code if source_config else "TNO"
+
         try:
-            parsed = self.parser.parse(html, link.url, source_name)
+            # Parse returns an Article object directly (or None)
+            article = self.parser.parse(html, link.url, source_name, site_code)
+            
+            if not article:
+                # Parser failed to extract essential data (like title)
+                self._stats['skipped'] += 1
+                return None
+                
+            # Update ID if link had strictly better one or ensure it's set
+            if link.article_id and link.article_id != article.id:
+                # Keep parser's ID if it looks valid, otherwise fallback
+                pass 
+            
+            article.link_alive = True
+            
         except Exception as e:
             print(f"[Archiver] Parse error: {e}")
             self._stats['failed'] += 1
             return None
-        
-        # 4. Build Article object
-        article = Article(
-            id=link.article_id or str(abs(hash(link.url))),
-            source=link.url.split('/')[2],  # Domain
-            source_name=source_name,
-            url=link.url,
-            title=parsed.get('title', link.title or 'Untitled'),
-            sapo=parsed.get('sapo', ''),
-            author=parsed.get('author', ''),
-            content_text=parsed.get('content_text', ''),
-            content_html=parsed.get('content_html', ''),
-            images=parsed.get('images', []),
-            published_at=parsed.get('published_at', link.published or ''),
-            crawled_at=datetime.utcnow().isoformat(),
-            status=STATUS_NEW,
-            link_alive=True,
-            category=parsed.get('category', '')
-        )
         
         # 5. Save to DB
         if self.storage.save_article(article):

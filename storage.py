@@ -600,9 +600,10 @@ class Storage:
                         SELECT * FROM import_db.images
                     """)
                     
+                    conn.commit()  # Commit transaction BEFORE detach
                     conn.execute("DETACH DATABASE import_db")
-                    conn.commit()
                 
+                # Re-connect to get fresh stats avoiding any lingering state
                 with self._get_connection() as conn:
                     articles = conn.execute("SELECT COUNT(*) FROM articles").fetchone()[0]
                     images = conn.execute("SELECT COUNT(*) FROM images").fetchone()[0]

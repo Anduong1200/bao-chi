@@ -155,8 +155,12 @@ class HunterThread(QThread):
         self.signals.log_message.emit(msg, level)
     
     def stop(self):
-        if self.hunter and self._loop:
+        if self.hunter and self._loop and self._loop.is_running():
             asyncio.run_coroutine_threadsafe(self.hunter.stop(), self._loop)
+        elif self.hunter:
+             # Loop already closed, just ensure hunter logic knows it's stopping if possible, 
+             # but asyncio tasks are likely dead.
+             pass
 
 
 class ArticleReader(QDialog):
@@ -248,7 +252,8 @@ class StreamPanel(QWidget):
         self.hunter_thread = None
         self._setup_ui()
         self._connect_signals()
-        self._refresh()
+        self.seen_ids = set()
+        # self._refresh() # Don't load history on startup for "Live Mode" feel
     
     def _setup_ui(self):
         layout = QVBoxLayout(self)
@@ -258,6 +263,7 @@ class StreamPanel(QWidget):
         ctrl = QGroupBox("Capture Controls")
         ctrl_layout = QHBoxLayout(ctrl)
         
+        # Interval
         ctrl_layout.addWidget(QLabel("Interval:"))
         self.interval_spin = QSpinBox()
         self.interval_spin.setRange(3, 60)
@@ -265,6 +271,35 @@ class StreamPanel(QWidget):
         self.interval_spin.setSuffix("s")
         ctrl_layout.addWidget(self.interval_spin)
         
+        self.apply_btn = QPushButton("Apply")
+        self.apply_btn.setFixedWidth(50)
+        self.apply_btn.clicked.connect(self._restart_if_running)
+        ctrl_layout.addWidget(self.apply_btn)
+        
+        # Source Filter
+        ctrl_layout.addWidget(QLabel("  Filter:"))
+        self.filter_combo = QComboBox()
+        self.filter_combo.addItem("All Sources")
+        # Load sources
+        from config import get_config
+        for src in get_config().sources:
+            if src.enabled:
+                self.filter_combo.addItem(src.name)
+        self.filter_combo.currentTextChanged.connect(self._apply_filter)
+        ctrl_layout.addWidget(self.filter_combo)
+        
+        # Search
+        self.search_edit = QLineEdit()
+        self.search_edit.setPlaceholderText("Search title...")
+        self.search_edit.textChanged.connect(self._apply_filter)
+        ctrl_layout.addWidget(self.search_edit)
+
+        self.pick_selected_btn = QPushButton("📥 Pick Selected")
+        self.pick_selected_btn.clicked.connect(self._pick_selected)
+        ctrl_layout.addWidget(self.pick_selected_btn)
+
+        ctrl_layout.addStretch()
+
         self.start_btn = QPushButton("▶ Start Capture")
         self.start_btn.setObjectName("startBtn")
         self.start_btn.clicked.connect(self._start)
@@ -276,10 +311,9 @@ class StreamPanel(QWidget):
         self.stop_btn.clicked.connect(self._stop)
         ctrl_layout.addWidget(self.stop_btn)
         
-        ctrl_layout.addStretch()
-        
+        # Status
         self.status = QLabel("● Stopped")
-        self.status.setStyleSheet("color: #da3633; font-weight: bold;")
+        self.status.setStyleSheet("color: #da3633; font-weight: bold; margin-left: 10px;")
         ctrl_layout.addWidget(self.status)
         
         layout.addWidget(ctrl)
@@ -351,21 +385,54 @@ class StreamPanel(QWidget):
         self.signals.article_captured.connect(self._on_article)
         self.signals.log_message.connect(self._on_log)
     
+    def _matches_filter(self, article: Article) -> bool:
+        """Check if article matches current filters."""
+        source_filter = self.filter_combo.currentText()
+        if source_filter != "All Sources" and article.source_name != source_filter:
+            return False
+            
+        search_text = self.search_edit.text().lower().strip()
+        if search_text and search_text not in article.title.lower():
+            return False
+            
+        return True
+
     def _refresh(self):
-        """Refresh table from DB."""
-        articles = self.storage.get_stream(100)
+        """Refresh table from DB with filters."""
         self.table.setRowCount(0)
+        self.seen_ids.clear()
         
-        for article in articles:
-            self._add_row(article)
+        # Get history (limit 500)
+        articles = self.storage.get_stream(500)
+        filtered = [a for a in articles if self._matches_filter(a)]
         
+        # Add to table (bottom append)
+        for article in filtered:
+            self._add_row(article, at_top=False)
+        
+        # Update Stats
         stats = self.storage.get_stats()
         self.stat_new.setText(f"New: {stats['new']}")
         self.stat_dead.setText(f"Dead Links: {stats['dead_links']}")
+
+    def _restart_if_running(self):
+        """Restart capture if running to apply new interval."""
+        if hasattr(self, 'hunter_thread') and self.hunter_thread and self.hunter_thread.isRunning():
+            self._stop()
+            QTimer.singleShot(1000, self._start)
+            
+    def _apply_filter(self):
+        """Trigger refresh on filter change."""
+        self._refresh()
     
-    def _add_row(self, article: Article):
-        """Add article to table."""
-        row = self.table.rowCount()
+    def _add_row(self, article: Article, at_top: bool=False):
+        """Add article to table if not duplicate."""
+        if article.id in self.seen_ids:
+            return
+            
+        self.seen_ids.add(article.id)
+        
+        row = 0 if at_top else self.table.rowCount()
         self.table.insertRow(row)
         
         # Time
@@ -389,51 +456,51 @@ class StreamPanel(QWidget):
         # Pick button
         pick_btn = QPushButton("Pick")
         pick_btn.setObjectName("pickBtn")
-        pick_btn.setProperty("article_id", article.id)
-        pick_btn.clicked.connect(lambda: self._pick(article.id))
+        pick_btn.clicked.connect(lambda checked, aid=article.id: self._pick_article(aid))
         self.table.setCellWidget(row, 4, pick_btn)
         
         # ID (hidden)
         self.table.setItem(row, 5, QTableWidgetItem(article.id))
+        
+        # Limit rows
+        while self.table.rowCount() > 500:
+            self.table.removeRow(self.table.rowCount() - 1)
     
     def _on_article(self, article: Article):
         """Handle new article from capture."""
-        # Insert at top
-        self.table.insertRow(0)
-        
-        time_str = datetime.now().strftime("%H:%M:%S")
-        self.table.setItem(0, 0, QTableWidgetItem(time_str))
-        
-        link_item = QTableWidgetItem("🟢")
-        link_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.table.setItem(0, 1, link_item)
-        
-        self.table.setItem(0, 2, QTableWidgetItem(article.source_name[:12]))
-        self.table.setItem(0, 3, QTableWidgetItem(article.title[:60]))
-        
-        pick_btn = QPushButton("Pick")
-        pick_btn.setObjectName("pickBtn")
-        pick_btn.clicked.connect(lambda: self._pick(article.id))
-        self.table.setCellWidget(0, 4, pick_btn)
-        
-        self.table.setItem(0, 5, QTableWidgetItem(article.id))
+        if not self._matches_filter(article):
+            return
+            
+        self._add_row(article, at_top=True)
         
         # Update stats
         stats = self.storage.get_stats()
         self.stat_new.setText(f"New: {stats['new']}")
-        
-        # Limit rows
-        while self.table.rowCount() > 200:
-            self.table.removeRow(self.table.rowCount() - 1)
     
-    def _on_log(self, msg: str, level: str):
+    def _on_log(self, msg: str, level: str="INFO"):
         time = datetime.now().strftime("%H:%M:%S")
         self.log.appendPlainText(f"[{time}] {msg}")
         self.log.moveCursor(QTextCursor.MoveOperation.End)
     
-    def _pick(self, article_id: str):
+    def _pick_article(self, article_id):
         """Move article to Reading Box."""
         self.storage.pick_article(article_id)
+        # Remove from table immediately for responsiveness
+        for row in range(self.table.rowCount()):
+            if self.table.item(row, 5).text() == article_id:
+                self.table.removeRow(row)
+                break
+        
+    def _pick_selected(self):
+        """Pick currently selected article."""
+        rows = self.table.selectionModel().selectedRows()
+        if not rows:
+            return
+            
+        for index in rows:
+            article_id = self.table.item(index.row(), 5).text()
+            self.storage.pick_article(article_id)
+            
         self._refresh()
     
     def _on_double_click(self, index):
@@ -853,8 +920,11 @@ class MainWindow(QMainWindow):
         self.reading_box = ReadingBoxPanel()
         tabs.addTab(self.reading_box, "📖 Reading Box")
         
+        self.archive_scan = ArchiveScanPanel(self.signals) # Pass signals instead of hunter
+        tabs.addTab(self.archive_scan, "🕰️ Archive Hunter")
+        
         self.archive = ArchivePanel()
-        tabs.addTab(self.archive, "📁 Archive")
+        tabs.addTab(self.archive, "📁 Database")
         
         tabs.currentChanged.connect(self._on_tab_changed)
         
@@ -877,6 +947,187 @@ def main():
     window = MainWindow()
     window.show()
     sys.exit(app.exec())
+
+
+class DeepScanWorker(QThread):
+    """Background worker for deep scanning."""
+    progress = pyqtSignal(str)
+    finished = pyqtSignal(int)  # count of found articles
+    
+    def __init__(self, signals, source_config, target_date):
+        super().__init__()
+        self.signals = signals
+        self.source_config = source_config
+        self.target_date = target_date
+        self._is_running = True
+        
+    def run(self):
+        # Create a temporary scanner just for this task
+        from scanner import Scanner
+        scanner = Scanner(self.source_config)
+        
+        # Create new event loop for this thread
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        try:
+            links = loop.run_until_complete(
+                scanner.scan_by_date(
+                    self.target_date, 
+                    progress_callback=self.progress.emit
+                )
+            )
+            
+            self.progress.emit(f"✅ Deep scan finished. Found {len(links)} manual candidates.")
+            
+            # Auto-archive found links
+            count = 0
+            
+            # Use separate archiver instance
+            from archiver import AutoArchiver
+            from storage import get_storage
+            from archiver import AutoArchiver
+            from storage import get_storage
+            from config import get_config
+            
+            archiver = AutoArchiver()
+            
+            for link in links:
+                if not self._is_running: break
+                self.progress.emit(f"Archiving: {link.title[:50]}...")
+                
+                # Synchronously run async capture in loop
+                article = loop.run_until_complete(
+                    archiver.capture(link, self.source_config.name)
+                )
+                
+                if article:
+                    self.signals.article_captured.emit(article)
+                    count += 1
+            
+            loop.run_until_complete(archiver.close())
+            self.finished.emit(count)
+            
+        except Exception as e:
+            self.progress.emit(f"❌ Error: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            self.finished.emit(0)
+            
+        finally:
+            loop.run_until_complete(scanner.close())
+            loop.close()
+
+    def stop(self):
+        self._is_running = False
+
+
+class ArchiveScanPanel(QWidget):
+    """Panel for Historical Deep Scan."""
+    
+    def __init__(self, signals: HunterSignals):
+        super().__init__()
+        self.signals = signals
+        self.worker = None
+        self.init_ui()
+        
+    def init_ui(self):
+        layout = QVBoxLayout(self)
+        
+        # Controls
+        ctrl_layout = QHBoxLayout()
+        
+        # Source Selector
+        self.source_combo = QComboBox()
+        self.refresh_sources()
+        ctrl_layout.addWidget(QLabel("Source:"))
+        ctrl_layout.addWidget(self.source_combo)
+        
+        # Date Picker
+        from PyQt6.QtWidgets import QDateEdit
+        self.date_edit = QDateEdit()
+        self.date_edit.setCalendarPopup(True)
+        self.date_edit.setDate(datetime.now().date())
+        self.date_edit.setDisplayFormat("dd/MM/yyyy")
+        ctrl_layout.addWidget(QLabel("Target Date:"))
+        ctrl_layout.addWidget(self.date_edit)
+        
+        # Buttons
+        self.btn_scan = QPushButton("Start Deep Scan")
+        self.btn_scan.clicked.connect(self.start_scan)
+        self.btn_scan.setStyleSheet("background: #1f6feb;")
+        ctrl_layout.addWidget(self.btn_scan)
+        
+        ctrl_layout.addStretch()
+        layout.addLayout(ctrl_layout)
+        
+        # Info
+        info = QLabel("💡 This feature scans past pages to find articles from the selected date.")
+        info.setStyleSheet("color: #8b949e; font-style: italic;")
+        layout.addWidget(info)
+        
+        # Log Output
+        self.log_area = QTextEdit()
+        self.log_area.setReadOnly(True)
+        self.log_area.setPlaceholderText("Scan logs will appear here...")
+        layout.addWidget(self.log_area)
+        
+        # Progress Bar
+        from PyQt6.QtWidgets import QProgressBar
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 0) # Indeterminate
+        self.progress_bar.hide()
+        layout.addWidget(self.progress_bar)
+        
+    def refresh_sources(self):
+        self.source_combo.clear()
+        config = get_config()
+        for source in config.sources:
+            if source.deep_scan:
+                self.source_combo.addItem(source.name, source)
+                
+    def log(self, msg: str):
+        self.log_area.append(msg)
+        cursor = self.log_area.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        self.log_area.setTextCursor(cursor)
+        
+    def start_scan(self):
+        if self.worker and self.worker.isRunning():
+            self.worker.stop()
+            self.worker.wait()
+            self.btn_scan.setText("Start Deep Scan")
+            self.btn_scan.setStyleSheet("background: #1f6feb;")
+            self.progress_bar.hide()
+            self.log("⏹️ Scan stopped by user.")
+            return
+
+        source_idx = self.source_combo.currentIndex()
+        if source_idx < 0:
+            QMessageBox.warning(self, "Error", "No deep-scan compatible source selected.")
+            return
+            
+        source_config = self.source_combo.itemData(source_idx)
+        target_date = self.date_edit.date().toPyDate()
+        
+        self.log(f"🚀 Starting Deep Scan for {source_config.name} on {target_date}...")
+        
+        self.worker = DeepScanWorker(self.signals, source_config, target_date)
+        self.worker.progress.connect(self.log)
+        self.worker.finished.connect(self.on_finished)
+        
+        self.btn_scan.setText("Stop Scan")
+        self.btn_scan.setStyleSheet("background: #da3633;")
+        self.progress_bar.show()
+        
+        self.worker.start()
+        
+    def on_finished(self, count):
+        self.btn_scan.setText("Start Deep Scan")
+        self.btn_scan.setStyleSheet("background: #1f6feb;")
+        self.progress_bar.hide()
+        self.log(f"🏁 Done. Total archived: {count}")
+        QMessageBox.information(self, "Deep Scan Complete", f"Found and archived {count} articles.")
 
 
 if __name__ == "__main__":

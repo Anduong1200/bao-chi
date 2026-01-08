@@ -89,28 +89,32 @@ class ArticleParser:
             )
             
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             print(f"[Parser] Error parsing {url}: {e}")
             return None
     
     def _extract_id(self, url: str) -> str:
         """Extract article ID from URL."""
-        # Thanh Niên pattern: -185260107154311932.htm
-        match = re.search(r'-(\d{15,20})\.htm', url)
+        # 1. Tuoi Tre / Thanh Nien pattern (long ID at end)
+        # Matches: ...-20260108203142592.htm
+        match = re.search(r'-(\d{14,20})\.htm', url)
         if match:
             return match.group(1)
         
-        # VnExpress pattern: -4851234.html
+        # 2. VnExpress pattern
+        # Matches: ...-4851234.html
         match = re.search(r'-(\d{6,10})\.html', url)
         if match:
             return match.group(1)
         
-        # Generic: last path segment
+        # 3. Generic: last path segment
         match = re.search(r'/([^/]+?)(?:\.htm|\.html)?$', url)
         if match:
             return match.group(1)[:50]
         
         return str(abs(hash(url)))
-    
+
     def _extract_source(self, url: str) -> str:
         """Extract source name from URL."""
         if 'thanhnien.vn' in url:
@@ -124,46 +128,28 @@ class ArticleParser:
         else:
             match = re.search(r'://(?:www\.)?([^/]+)', url)
             return match.group(1) if match else 'unknown'
-    
+
+    def _safe_get(self, tag, attr: str, default=None):
+        """Helper to get attribute safely, avoiding NoneType crash."""
+        if tag:
+            return tag.get(attr, default)
+        return default
+
     def _extract_title(self, soup: BeautifulSoup, selectors: SelectorSet) -> str:
         """Extract article title."""
-        elem = soup.select_one(selectors.title)
-        if elem:
-            return elem.get_text(strip=True)
-        
-        # Fallback to meta og:title
-        meta = soup.find('meta', property='og:title')
-        if meta and meta.get('content'):
-            return meta['content']
-        
-        # Last resort: h1
-        h1 = soup.find('h1')
-        return h1.get_text(strip=True) if h1 else ""
-    
+        title_elem = soup.select_one(selectors.title)
+        return title_elem.get_text(strip=True) if title_elem else ""
+
     def _extract_sapo(self, soup: BeautifulSoup, selectors: SelectorSet) -> str:
-        """Extract article description."""
-        elem = soup.select_one(selectors.sapo)
-        if elem:
-            return elem.get_text(strip=True)
-        
-        meta = soup.find('meta', property='og:description')
-        if meta and meta.get('content'):
-            return meta['content']
-        
-        return ""
-    
+        """Extract article sapo (summary)."""
+        sapo_elem = soup.select_one(selectors.sapo)
+        return sapo_elem.get_text(strip=True) if sapo_elem else ""
+
     def _extract_author(self, soup: BeautifulSoup, selectors: SelectorSet) -> str:
-        """Extract author name."""
-        elem = soup.select_one(selectors.author)
-        if elem:
-            return elem.get_text(strip=True)
-        
-        meta = soup.find('meta', attrs={'name': 'author'})
-        if meta and meta.get('content'):
-            return meta['content']
-        
-        return ""
-    
+        """Extract article author."""
+        author_elem = soup.select_one(selectors.author)
+        return author_elem.get_text(strip=True) if author_elem else ""
+
     def _extract_published(self, soup: BeautifulSoup, selectors: SelectorSet) -> str:
         """Extract published time."""
         elem = soup.select_one(selectors.time)
@@ -173,15 +159,17 @@ class ArticleParser:
             if parsed:
                 return parsed
         
+        # Safe meta tag access
         meta = soup.find('meta', property='article:published_time')
-        if meta and meta.get('content'):
-            return meta['content']
+        content = self._safe_get(meta, 'content')
+        if content:
+            return content
         
+        # Safe time tag access
         time_elem = soup.find('time')
-        if time_elem:
-            dt = time_elem.get('datetime')
-            if dt:
-                return dt
+        dt = self._safe_get(time_elem, 'datetime')
+        if dt:
+            return dt
         
         return datetime.utcnow().isoformat()
     
@@ -228,7 +216,17 @@ class ArticleParser:
             comment.extract()
         
         for elem in content.find_all(class_=True):
-            classes = ' '.join(elem.get('class', []))
+            if not hasattr(elem, 'get'):
+                continue
+            
+            try:
+                classes_list = elem.get('class', [])
+                if not classes_list:
+                    continue
+                classes = ' '.join(classes_list)
+            except:
+                continue
+                
             for pattern in self.REMOVE_PATTERNS:
                 if pattern.search(classes):
                     elem.decompose()

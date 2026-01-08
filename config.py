@@ -11,6 +11,15 @@ import os
 
 
 @dataclass
+class DeepScanConfig:
+    """Configuration for historical crawler (deep scan)."""
+    base_url: str = ""
+    page_param: str = "p"
+    date_css: str = ""
+    date_format: str = "%d/%m/%Y"
+
+
+@dataclass
 class SourceConfig:
     """Configuration for a single news source."""
     name: str
@@ -19,6 +28,7 @@ class SourceConfig:
     site_code: str = "TNO"  # Parser selector key
     frequency: int = 5  # Scan frequency in seconds
     enabled: bool = True
+    deep_scan: Optional[DeepScanConfig] = None
 
 
 @dataclass
@@ -139,13 +149,24 @@ _config_path: Optional[Path] = None
 
 def _parse_source(data: Dict) -> SourceConfig:
     """Parse source configuration."""
+    deep_scan_data = data.get('deep_scan')
+    deep_scan = None
+    if deep_scan_data:
+        deep_scan = DeepScanConfig(
+            base_url=deep_scan_data.get('base_url', ''),
+            page_param=deep_scan_data.get('page_param', 'p'),
+            date_css=deep_scan_data.get('date_css', ''),
+            date_format=deep_scan_data.get('date_format', '%d/%m/%Y')
+        )
+
     return SourceConfig(
         name=data.get('name', 'Unknown'),
         url=data.get('url', ''),
         type=data.get('type', 'rss'),
         site_code=data.get('site_code', 'TNO'),
         frequency=data.get('frequency', 5),
-        enabled=data.get('enabled', True)
+        enabled=data.get('enabled', True),
+        deep_scan=deep_scan
     )
 
 

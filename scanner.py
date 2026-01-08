@@ -90,17 +90,161 @@ class Scanner:
             return match.group(1)[:50]
         return str(abs(hash(url)))
     
-    async def scan(self) -> List[ArticleLink]:
+    async def scan(self, min_timestamp: Optional[datetime] = None) -> List[ArticleLink]:
         """
         Scan for new articles.
         
+        Args:
+            min_timestamp: Ignore articles older than this (if date available)
+            
         Returns:
             List of ArticleLink found
         """
+        links = []
         if self.source.type == "rss":
-            return await self._scan_xml()
+            links = await self._scan_xml()
         else:
-            return await self._scan_html()
+            links = await self._scan_html()
+            
+        # Basic filtering by timestamp if needed
+        if min_timestamp:
+            filtered = []
+            for link in links:
+                if not link.published:
+                    filtered.append(link)
+                    continue
+                try:
+                    pub = datetime.fromisoformat(link.published) if isinstance(link.published, str) else link.published
+                    if pub >= min_timestamp:
+                        filtered.append(link)
+                except:
+                    filtered.append(link)
+            return filtered
+            
+        return links
+
+    async def scan_by_date(self, target_date: datetime.date, progress_callback=None) -> List[ArticleLink]:
+        """
+        Deep Scan: Find articles for a specific date by backtracking pages.
+        """
+        config = self.source.deep_scan
+        if not config:
+            if progress_callback:
+                progress_callback(f"⚠️ Source {self.source.name} not configured for deep scan")
+            return []
+            
+        links = []
+        page = 1
+        found_target_date = False
+        
+        import random
+        from bs4 import BeautifulSoup
+        
+        # Max pages safety limit
+        MAX_PAGES = 50 
+        
+        # Ensure session
+        await self._get_session()
+        
+        while page <= MAX_PAGES:
+            sep = '&' if '?' in config.base_url else '?'
+            url = f"{config.base_url}{sep}{config.page_param}={page}"
+            
+            if progress_callback:
+                progress_callback(f"Scanning Page {page}...")
+            
+            try:
+                # Fetch page
+                async with self.session.get(url) as resp:
+                    if resp.status != 200:
+                        break
+                    html = await resp.text()
+                
+                soup = BeautifulSoup(html, 'lxml')
+                items = soup.select('article, .box-category-item, .story')
+                
+                if not items:
+                    # Fallback to searching for date elements directly
+                    items = soup.select(config.date_css)
+                    if not items:
+                        if progress_callback: progress_callback(f"No items found on page {page}")
+                        break
+                
+                # Check dates on this page
+                page_dates = []
+                
+                for item in items:
+                   # Locate date element
+                   if item.name == 'span' or 'time' in item.get('class', []):
+                       date_elem = item
+                       parent = item.find_parent('article') or item.find_parent('div', class_=re.compile(r'item|box'))
+                       if parent: item = parent
+                   else:
+                       date_elem = item.select_one(config.date_css)
+
+                   if not date_elem:
+                       continue
+                       
+                   date_str = date_elem.get_text(strip=True)
+                   
+                   # Extract Link
+                   a_tag = item.find('a', href=True)
+                   if not a_tag:
+                       if item.name == 'a': a_tag = item
+                       else: continue
+                       
+                   link_url = a_tag['href']
+                   if not link_url.startswith('http'):
+                       from urllib.parse import urljoin
+                       link_url = urljoin(config.base_url, link_url)
+                       
+                   link = ArticleLink(
+                       url=link_url, 
+                       title=a_tag.get('title') or a_tag.get_text(strip=True),
+                       article_id=self._extract_article_id(link_url)
+                   )
+                   
+                   # Compare Date
+                   try:
+                       clean_date = re.search(r'(\d{1,2}/\d{1,2}/\d{4})', date_str)
+                       if clean_date:
+                           date_str = clean_date.group(1)
+                       
+                       article_date = datetime.strptime(date_str, config.date_format).date()
+                       page_dates.append(article_date)
+                       
+                       if article_date == target_date:
+                           found_target_date = True
+                           if link not in links:
+                               links.append(link)
+                               print(f"[Scanner deep] Found: {link.url}")
+                       
+                   except Exception as e:
+                       continue
+
+                # Decision Logic
+                if not page_dates:
+                    break
+                    
+                max_page_date = max(page_dates)
+                if progress_callback:
+                    progress_callback(f"Page {page} dates: {min(page_dates)} -> {max_page_date}")
+
+                # If ALL dates on this page are older than target -> STOP
+                if max_page_date < target_date:
+                    if progress_callback: progress_callback(f"⏹️ Reached older data ({max_page_date}). Stopping.")
+                    break
+                
+                page += 1
+                await asyncio.sleep(random.uniform(1.0, 2.0))
+                
+            except Exception as e:
+                print(f"[Scanner] Deep scan error: {e}")
+                import traceback
+                traceback.print_exc()
+                break
+                
+        return links
     
     async def _scan_xml(self) -> List[ArticleLink]:
         """
@@ -148,9 +292,13 @@ class Scanner:
         articles = []
         
         try:
-            # Clean XML: remove namespace declarations and prefixes
-            xml_content = re.sub(r'\sxmlns[^=]*="[^"]*"', '', xml_content)
-            xml_content = re.sub(r'<(/?)(\w+):', r'<\1', xml_content)
+            # Clean XML to remove namespaces that cause parsing errors
+            # 1. Remove xmlns declarations
+            xml_content = re.sub(r'xmlns:?[^=]*=["\'][^"\']*["\']', '', xml_content)
+            # 2. Remove namespace prefixes from attributes (e.g. news:loc -> loc)
+            xml_content = re.sub(r'\s[a-zA-Z0-9]+:([a-zA-Z0-9]+)=', r' \1=', xml_content)
+            # 3. Remove namespace prefixes from open tags (<news:item> -> <item>)
+            xml_content = re.sub(r'<(\/?)[a-zA-Z0-9]+:', r'<\1', xml_content)
             
             root = ET.fromstring(xml_content)
             
